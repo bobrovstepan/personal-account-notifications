@@ -4,9 +4,7 @@ declare(strict_types=1);
 
 namespace App\Http\Controllers;
 
-use App\DTO\MarketingNotificationData;
 use App\DTO\NotificationListQuery;
-use App\DTO\SystemNotificationData;
 use App\Enums\NotificationCategory;
 use App\Http\Requests\StoreNotificationRequest;
 use App\Http\Resources\NotificationResource;
@@ -27,7 +25,7 @@ class NotificationController extends Controller
             unreadOnly: (bool) $request->input('unread_only', false),
         );
 
-        $result = $service->list(auth()->user(), $query);
+        $result = $service->list($this->user(), $query);
 
         return response()->json([
             'notifications' => NotificationResource::collection($result->data),
@@ -39,23 +37,17 @@ class NotificationController extends Controller
     {
         $validated = $request->validated();
 
-        match ($request->category()) {
-            NotificationCategory::System => $service->sendSystem(
-                auth()->user(),
-                new SystemNotificationData($validated['title'], $validated['message']),
-            ),
-            NotificationCategory::Marketing => $service->sendMarketing(
-                auth()->user(),
-                new MarketingNotificationData($validated['title'], $validated['message'], $validated['cta_url'] ?? null),
-            ),
-        };
+        $service->send(
+            $this->user(),
+            $request->category()->toData($validated['title'], $validated['message'], $validated['cta_url'] ?? null),
+        );
 
         return response()->json(['message' => __('notifications.sent')], 202);
     }
 
     public function show(Request $request, NotificationService $service, string $id): JsonResponse
     {
-        $notification = $service->find(auth()->user(), $id);
+        $notification = $service->find($this->user(), $id);
 
         return response()->json([
             'notification' => NotificationResource::make($notification),
@@ -65,13 +57,13 @@ class NotificationController extends Controller
     public function unreadCount(Request $request, NotificationService $service): JsonResponse
     {
         return response()->json([
-            'unread_count' => $service->countUnread(auth()->user()),
+            'unread_count' => $service->countUnread($this->user()),
         ], 200);
     }
 
     public function markRead(Request $request, NotificationService $service, string $id): JsonResponse
     {
-        $notification = $service->markAsRead(auth()->user(), $id);
+        $notification = $service->markAsRead($this->user(), $id);
 
         return response()->json([
             'notification' => NotificationResource::make($notification),
@@ -80,7 +72,7 @@ class NotificationController extends Controller
 
     public function markAllRead(Request $request, NotificationService $service): JsonResponse
     {
-        $service->markAllAsRead(auth()->user());
+        $service->markAllAsRead($this->user());
 
         return response()->json(['message' => __('notifications.marked_all_read')], 200);
     }

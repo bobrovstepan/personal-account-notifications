@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 use App\DTO\MarketingNotificationData;
 use App\DTO\SystemNotificationData;
+use App\Events\SystemAlertOccurred;
+use App\Listeners\SendSystemAlertNotification;
 use App\Models\User;
 use App\Notifications\MarketingNotification;
 use App\Notifications\SystemNotification;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Notification;
 
 uses(RefreshDatabase::class);
@@ -85,7 +88,7 @@ it('returns 401 for unauthenticated request', function () {
 });
 
 it('returns notifications with pagination meta', function () {
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('Test Title', 'Test message'),
     ));
 
@@ -105,10 +108,10 @@ it('returns notifications with pagination meta', function () {
 });
 
 it('filters notifications by category', function () {
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('System', 'System message'),
     ));
-    $this->user->notify(new MarketingNotification(
+    $this->user->notifyNow(new MarketingNotification(
         new MarketingNotificationData('Marketing', 'Marketing message'),
     ));
 
@@ -121,14 +124,13 @@ it('filters notifications by category', function () {
 });
 
 it('filters unread notifications only', function () {
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('Unread', 'Unread message'),
     ));
 
-    $notification = $this->user->notifications()->first();
-    $notification->markAsRead();
+    $this->user->notifications()->first()->markAsRead();
 
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('Still unread', 'Still unread message'),
     ));
 
@@ -141,7 +143,7 @@ it('filters unread notifications only', function () {
 });
 
 it('marks a single notification as read', function () {
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('Mark me', 'Message'),
     ));
 
@@ -158,10 +160,10 @@ it('marks a single notification as read', function () {
 });
 
 it('marks all notifications as read', function () {
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('First', 'Message 1'),
     ));
-    $this->user->notify(new MarketingNotification(
+    $this->user->notifyNow(new MarketingNotification(
         new MarketingNotificationData('Second', 'Message 2'),
     ));
 
@@ -181,7 +183,7 @@ it('returns 404 when marking non-existent notification as read', function () {
 
 it('does not allow marking another user notification as read', function () {
     $otherUser = User::factory()->create();
-    $otherUser->notify(new SystemNotification(
+    $otherUser->notifyNow(new SystemNotification(
         new SystemNotificationData('Other', 'Message'),
     ));
 
@@ -193,7 +195,7 @@ it('does not allow marking another user notification as read', function () {
 });
 
 it('shows a single notification by id', function () {
-    $this->user->notify(new SystemNotification(
+    $this->user->notifyNow(new SystemNotification(
         new SystemNotificationData('Show me', 'Message'),
     ));
 
@@ -208,7 +210,7 @@ it('shows a single notification by id', function () {
 
 it('returns 404 for show when notification belongs to another user', function () {
     $otherUser = User::factory()->create();
-    $otherUser->notify(new SystemNotification(
+    $otherUser->notifyNow(new SystemNotification(
         new SystemNotificationData('Other', 'Message'),
     ));
 
@@ -220,11 +222,10 @@ it('returns 404 for show when notification belongs to another user', function ()
 });
 
 it('returns unread count', function () {
-    $this->user->notify(new SystemNotification(new SystemNotificationData('A', 'msg')));
-    $this->user->notify(new MarketingNotification(new MarketingNotificationData('B', 'msg')));
+    $this->user->notifyNow(new SystemNotification(new SystemNotificationData('A', 'msg')));
+    $this->user->notifyNow(new MarketingNotification(new MarketingNotificationData('B', 'msg')));
 
-    $notification = $this->user->notifications()->first();
-    $notification->markAsRead();
+    $this->user->notifications()->first()->markAsRead();
 
     $this->actingAs($this->user)
         ->getJson('/api/notifications/unread')
@@ -250,4 +251,79 @@ it('queues marketing notification instead of sending synchronously', function ()
     ));
 
     Notification::assertSentTo($this->user, MarketingNotification::class);
+});
+
+it('rejects invalid cta_url format', function () {
+    $this->actingAs($this->user)
+        ->postJson('/api/notifications', [
+            'category' => 'marketing',
+            'title' => 'Promo',
+            'message' => 'Text',
+            'cta_url' => 'not-a-url',
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors(['cta_url']);
+});
+
+it('respects per_page parameter', function () {
+    for ($i = 0; $i < 5; $i++) {
+        $this->user->notifyNow(new SystemNotification(
+            new SystemNotificationData("Title {$i}", "Message {$i}"),
+        ));
+    }
+
+    $this->actingAs($this->user)
+        ->getJson('/api/notifications?per_page=2')
+        ->assertStatus(200)
+        ->assertJsonPath('per_page', 2)
+        ->assertJsonPath('total', 5)
+        ->assertJsonPath('last_page', 3)
+        ->assertJsonCount(2, 'notifications');
+});
+
+it('returns 401 for unauthenticated post', function () {
+    $this->postJson('/api/notifications', [
+        'category' => 'system',
+        'title' => 'Title',
+        'message' => 'Message',
+    ])->assertStatus(401);
+});
+
+it('returns 401 for unauthenticated patch all', function () {
+    $this->patchJson('/api/notifications')->assertStatus(401);
+});
+
+it('returns 401 for unauthenticated patch single', function () {
+    $this->patchJson('/api/notifications/some-id')->assertStatus(401);
+});
+
+it('returns 401 for unauthenticated show', function () {
+    $this->getJson('/api/notifications/some-id')->assertStatus(401);
+});
+
+it('returns 401 for unauthenticated unread count', function () {
+    $this->getJson('/api/notifications/unread')->assertStatus(401);
+});
+
+it('dispatches SystemAlertOccurred event and listener is registered', function () {
+    Event::fake();
+
+    SystemAlertOccurred::dispatch(
+        $this->user,
+        new SystemNotificationData('Alert', 'Something happened'),
+    );
+
+    Event::assertDispatched(SystemAlertOccurred::class);
+    Event::assertListening(SystemAlertOccurred::class, SendSystemAlertNotification::class);
+});
+
+it('listener sends system notification when SystemAlertOccurred is dispatched', function () {
+    Notification::fake();
+
+    SystemAlertOccurred::dispatch(
+        $this->user,
+        new SystemNotificationData('Alert', 'Something happened'),
+    );
+
+    Notification::assertSentTo($this->user, SystemNotification::class);
 });

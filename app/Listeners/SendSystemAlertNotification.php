@@ -15,6 +15,6 @@ class SendSystemAlertNotification
 
     public function handle(SystemAlertOccurred $event): void
     {
-        $this->service->sendSystem($event->user, $event->data);
+        $this->service->send($event->user, $event->data);
     }
 }

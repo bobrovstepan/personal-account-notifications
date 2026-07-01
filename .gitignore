@@ -1,8 +1,10 @@
 *.log
 .DS_Store
+CLAUDE.md
 .env
 .env.backup
 .env.production
+.env.docker
 .phpactor.json
 .phpunit.result.cache
 /.codex

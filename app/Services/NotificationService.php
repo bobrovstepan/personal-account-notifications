@@ -4,14 +4,11 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\DTO\MarketingNotificationData;
+use App\DTO\Contracts\NotificationData;
 use App\DTO\NotificationListQuery;
 use App\DTO\PaginationResult;
-use App\DTO\SystemNotificationData;
 use App\Models\Notification;
 use App\Models\User;
-use App\Notifications\MarketingNotification;
-use App\Notifications\SystemNotification;
 use App\Repositories\Contracts\NotificationRepositoryInterface;
 
 class NotificationService
@@ -35,14 +32,9 @@ class NotificationService
         return $this->repository->countUnread($user);
     }
 
-    public function sendSystem(User $user, SystemNotificationData $data): void
+    public function send(User $user, NotificationData $data): void
     {
-        $user->notify(new SystemNotification($data));
-    }
-
-    public function sendMarketing(User $user, MarketingNotificationData $data): void
-    {
-        $user->notify(new MarketingNotification($data));
+        $user->notify($data->toNotification());
     }
 
     public function markAsRead(User $user, string $id): Notification
